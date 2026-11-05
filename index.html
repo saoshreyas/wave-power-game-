@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Wave Power Dive</title>
+<style>
+:root{color-scheme:dark;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box}
+html,body{margin:0;height:100%;background:#06162b;font-family:system-ui,sans-serif}
+body{display:flex;align-items:center;justify-content:center}
+canvas{width:100%;max-width:1000px;max-height:100%;aspect-ratio:900/560;display:block}
+</style></head><body>
+<canvas id="c" width="900" height="560"></canvas>
+<script>
+const cv=document.getElementById('c'),g=cv.getContext('2d');
+const W=900,H=560,SURF=70,CELL=30,COLS=30,ROWS=14,TOTAL=75;
+let SHIP_X=130;const DOCK_X=450;
+const floorY=x=>505+14*Math.sin(x/85)+6*Math.sin(x/31);
+const keys={};
+const KW={u:'KeyW',d:'KeyS',l:'KeyA',r:'KeyD'};
+const KA={u:'ArrowUp',d:'ArrowDown',l:'ArrowLeft',r:'ArrowRight'};
+let swap=false;
+const ctl=id=>((id==1)!==swap)?'WASD':'Arrows';
+const CRIT=[['🐟',40,130,34,1],['🐠',-30,200,30,2],['🐢',-18,300,44,3],['🐙',22,420,40,4],['🐡',-45,360,32,5],['🦑',12,250,36,6],['🐬',-60,160,46,7]];
+addEventListener('keydown',e=>{keys[e.code]=1;if(e.code=='KeyM')muted=!muted;if(e.code=='KeyI'&&state!='play')about=!about;if(e.code.startsWith('Arrow')||e.code=='Space')e.preventDefault();
+  if((e.code=='Space'||e.code=='Enter')&&state!='play')start();});
+addEventListener('keyup',e=>keys[e.code]=0);
+cv.addEventListener('pointerdown',()=>{if(state!='play')start();});
+let about=false,prac=0,clk=0,state='menu',t=0,left=TOTAL,cells,P,last=0;
+const mk=(id,x,col,name,k)=>({id,x,y:0,vx:0,vy:0,bat:100,col,name,k,dead:0,chg:false,trips:0,face:1,lost:0});
+function start(){
+  if(state=='over')swap=!swap;
+  audioInit();beep(440,.1,'square',.08,880);
+  prac=10;state='play';about=false;reset();
+}
+function reset(){
+  SHIP_X=130;cells=new Array(COLS*ROWS).fill(0);left=TOTAL;t=0;
+  P=[mk(1,SHIP_X+60,'#ff9a3c','Surface Sub',swap?KA:KW),
+     mk(2,DOCK_X-60,'#b6f23a','Dock Sub',swap?KW:KA)];
+  P[0].y=SURF+40;P[1].y=floorY(DOCK_X)-60;
+}
+const charger=p=>p.id==1?[SHIP_X,SURF+12]:[DOCK_X,floorY(DOCK_X)-22];
+const wave=()=>0.55+0.45*Math.sin(t*1.3);
+function upd(dt){
+  t+=dt;
+  if(prac>0){prac-=dt;if(prac<=0){reset();fanfare();return}}
+  else left-=dt;
+  if(left<=0){left=0;state='over';fanfare();return}
+  for(const p of P){
+    const [cx,cy]=charger(p);
+    const near=Math.hypot(p.x-cx,p.y-cy)<(p.id==1?80:65);
+    if(p.dead>0&&p.id==1){
+      p.dead=1;p.vx*=.95;p.vy=-35;p.wait=(p.wait||0)+dt;p.waitTotal=(p.waitTotal||0)+dt;
+      const dx=p.x-SHIP_X;
+      SHIP_X+=Math.sign(dx)*Math.min(Math.abs(dx),45*dt);
+      if(Math.abs(dx)<30&&p.y<SURF+22&&p.wait>=13){
+        p.rescue=(p.rescue||0)+dt;p.chg=true;
+        if(p.rescue>2){p.dead=0;p.bat=100;p.rescue=0;p.wait=0;p.trips++;p.chg=false;chime()}
+      }
+    }
+    else if(p.dead>0){p.dead-=dt;p.vx*=.9;p.vy*=.9;
+      if(p.dead<=0){p.x=cx-60;p.y=cy-40;p.bat=30;p.lost++}}
+    else{
+      const k=p.k,a=420*dt;
+      if(keys[k.l]){p.vx-=a;p.face=-1}
+      if(keys[k.r]){p.vx+=a;p.face=1}
+      if(keys[k.u])p.vy-=a;
+      if(keys[k.d])p.vy+=a;
+      const moving=keys[k.l]||keys[k.r]||keys[k.u]||keys[k.d];
+      const was=p.chg;
+      p.chg=p.id==2&&near&&p.bat<100;
+      if(p.chg&&!was&&p.id==1)p.trips++;
+      if(p.chg){
+        p.bat=Math.min(100,p.bat+(p.id==1?22:45*wave())*dt);
+        if(t-(p.lc||0)>.25){p.lc=t;beep(700+p.bat*6,.15,'sine',.06)}
+      }
+      else{
+        if(prac<=0)p.bat-=(moving?3.2:1.2)*dt;
+        if(p.bat<25&&t-(p.lw||0)>1){p.lw=t;beep(300,.2,'sawtooth',.05)}
+      }
+      if(p.bat<=0){p.bat=0;p.dead=3;beep(200,.6,'sawtooth',.1,50)}
+    }
+    p.vx*=Math.pow(.04,dt);p.vy*=Math.pow(.04,dt);
+    p.x=Math.max(20,Math.min(W-20,p.x+p.vx*dt));
+    p.y=Math.max(SURF+10,Math.min(floorY(p.x)-14,p.y+p.vy*dt));
+    if(p.dead<=0)scan(p);
+  }
+  if(!P[0].dead&&Math.abs(SHIP_X-130)>1)
+    SHIP_X+=Math.sign(130-SHIP_X)*Math.min(Math.abs(130-SHIP_X),60*dt);
+}
+function scan(p){
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+    const x=c*CELL+15,y=SURF+r*CELL+15;
+    if(Math.hypot(x-p.x,y-p.y)<46&&y<floorY(x)-8){
+      if(cells[r*COLS+c]!=p.id)blip(p);
+      cells[r*COLS+c]=p.id;
+    }
+  }
+}
+const score=id=>cells.filter(v=>v==id).length;
+function sub(p){
+  g.save();g.translate(p.x,p.y);g.scale(p.face,1);
+  if(p.dead>0)g.globalAlpha=.5+.3*Math.sin(t*10);
+  g.fillStyle=p.col;g.beginPath();g.ellipse(0,0,24,12,0,0,7);g.fill();
+  g.fillStyle='#fff';g.beginPath();g.arc(9,-2,5,0,7);g.fill();
+  g.fillStyle='#123';g.beginPath();g.arc(10,-2,2.4,0,7);g.fill();
+  g.fillStyle=p.col;g.fillRect(-4,-17,8,6);
+  g.save();g.translate(-26,0);g.rotate(t*14);g.fillStyle='#fff';g.fillRect(-7,-1.5,14,3);g.restore();
+  g.restore();
+  g.fillStyle='#fff';g.font='bold 12px system-ui';g.textAlign='center';
+  g.fillText(p.id==1?'P1':'P2',p.x,p.y-22);
+}
+function txt(s,x,y,sz,col,al){g.fillStyle=col||'#fff';g.font='bold '+sz+'px system-ui';g.textAlign=al||'center';g.fillText(s,x,y)}
+function bar(x,y,w,v,p){
+  g.fillStyle='#0008';g.fillRect(x,y,w,16);
+  g.fillStyle=v<25?'#ff4d4d':p.col;g.fillRect(x+2,y+2,(w-4)*v/100,12);
+  txt('🔋 '+Math.round(v)+'%',x+w/2,y+13,12,'#fff');
+}
+function draw(){
+  const gr=g.createLinearGradient(0,0,0,H);gr.addColorStop(0,'#2a9de0');gr.addColorStop(1,'#04284d');
+  g.fillStyle='#9fe0ff';g.fillRect(0,0,W,SURF);
+  g.fillStyle='#ffd84a';g.beginPath();g.arc(820,30,18,0,7);g.fill();
+  g.fillStyle=gr;g.fillRect(0,SURF,W,H-SURF);
+  critters();
+  if(cells)for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+    const v=cells[r*COLS+c];if(!v)continue;
+    g.fillStyle=v==1?'rgba(255,154,60,.38)':'rgba(182,242,58,.38)';
+    g.fillRect(c*CELL+1,SURF+r*CELL+1,CELL-2,CELL-2);
+  }
+  g.fillStyle='#d9b26b';g.beginPath();g.moveTo(0,H);
+  for(let x=0;x<=W;x+=10)g.lineTo(x,floorY(x));g.lineTo(W,H);g.fill();
+  g.strokeStyle='#fff8';g.lineWidth=3;g.beginPath();
+  for(let x=0;x<=W;x+=8){const y=SURF+3*Math.sin(x/25+t*2);x?g.lineTo(x,y):g.moveTo(x,y)}g.stroke();
+  // ship
+  g.fillStyle='#e8e8e8';g.fillRect(SHIP_X-45,SURF-20,90,18);g.fillStyle='#d33';g.fillRect(SHIP_X-45,SURF-8,90,6);
+  g.fillStyle='#fff';g.fillRect(SHIP_X-10,SURF-34,24,14);
+  txt('Charging Ship',SHIP_X,SURF-40,13,'#06304f');
+  // buoy + cable + dock
+  const by=SURF-4+4*Math.sin(t*1.3),fy=floorY(DOCK_X);
+  g.strokeStyle='#222';g.lineWidth=3;g.beginPath();g.moveTo(DOCK_X,by);g.lineTo(DOCK_X,fy-14);g.stroke();
+  g.fillStyle='#ffd84a';g.beginPath();g.ellipse(DOCK_X,by,26,12,0,0,7);g.fill();
+  g.fillStyle='#e33';g.fillRect(DOCK_X-4,by-24,8,16);
+  txt('Wave Buoy',DOCK_X,SURF-30,13,'#06304f');
+  const w=wave();g.fillStyle='#ffe066';
+  for(let i=0;i<3;i++)if(w>(i+1)/3.4){g.fillRect(DOCK_X-10+i*10,by+14,5,5)}
+  g.fillStyle='#667';g.fillRect(DOCK_X-38,fy-18,76,18);g.fillStyle='#4de';g.fillRect(DOCK_X-30,fy-14,60,5);
+  txt('Underwater Dock',DOCK_X,fy+18,13,'#4a3510');
+  if(P)P.forEach(p=>{
+    if(p.chg){g.strokeStyle='#ffe066';g.lineWidth=3;g.beginPath();g.arc(p.x,p.y,30+4*Math.sin(t*12),0,7);g.stroke();
+      txt('⚡',p.x,p.y-30,18)}
+    sub(p);
+    if(p.dead>0)txt(p.id==1?'Out of power! Ship arrives in '+Math.max(1,Math.ceil(15-(p.wait||0)))+'s…':'Battery empty! Rescue coming…',p.x,p.y+34,13,'#fff');
+    else if(p.bat<25&&Math.sin(t*8)>0)txt('Low battery!',p.x,p.y+34,13,'#ff9');
+  });
+  // HUD
+  g.fillStyle='#000a';g.fillRect(0,0,W,34);
+  if(P){
+    txt('P1 Surface Sub ('+ctl(1)+')',10,14,12,P[0].col,'left');bar(10,17,170,P[0].bat,P[0]);
+    txt('P2 Dock Sub ('+ctl(2)+')',W-10,14,12,P[1].col,'right');bar(W-180,17,170,P[1].bat,P[1]);
+    const a=score(1),b=score(2);
+    txt(prac>0?'🏊 Practice swim: '+Math.ceil(prac)+'s':a+'  ⏱ '+Math.ceil(left)+'s  '+b,W/2,24,20,'#fff');
+    if(prac>0)txt('Try swimming around! Scores start at zero after practice.',W/2,100,16,'#fff');
+    txt('Wave power: '+'▮'.repeat(Math.round(w*5))+'▯'.repeat(5-Math.round(w*5)),W/2,H-6,12,'#fff');
+  }
+  if(state=='menu')overlay('🌊 Wave Power Dive',[
+    'Two robot subs map the ocean floor! Swim to scan and color the squares.',
+    'Batteries run down! P1’s ship only comes when the battery is empty.',
+    'P2 can charge ANY time at the wave-powered dock in the middle!',
+    'Surface Sub: '+ctl(1)+'   Dock Sub: '+ctl(2)+'  (subs swap each rematch!)',
+    'Press SPACE or tap to start']);
+  if(state=='menu')txt('Made by WA Wave Outreach Team',W/2,425,15,'#9fe0ff');
+  if(state=='over'){
+    const a=score(1),b=score(2),win=a>b?'P1 Surface Sub wins!':b>a?'P2 Dock Sub wins!':'It’s a tie!';
+    overlay(win,[
+      'P1 Surface Sub: '+a+' squares  ·  waited '+Math.round(P[0].waitTotal||0)+'s for the ship',
+      'P2 Dock Sub: '+b+' squares  ·  waited 0s: the dock is always ready!',
+      'Waves power the dock right on the sea floor, so a sub never',
+      'has to wait for a ship. Less waiting = more ocean mapped!',
+      'Press SPACE or tap for a REMATCH: swap subs!'],60);
+    party(a,b);
+  }
+  if(about)aboutScreen();
+}
+let AC=null,muted=false,mstep=0;
+const MEL=[262,330,392,330,294,392,440,392];
+function audioInit(){
+  if(AC){AC.resume();return}
+  try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){return}
+  setInterval(()=>{
+    if(!AC||muted)return;
+    const n=MEL[mstep%8],v=state=='play'?.035:.02;
+    beep(n,.22,'triangle',v);
+    if(mstep%4==0)beep(n/2,.5,'sine',v*1.6);
+    mstep++;
+  },240);
+}
+function beep(f,d,type,vol,slide){
+  if(!AC||muted)return;
+  const o=AC.createOscillator(),gn=AC.createGain(),n=AC.currentTime;
+  o.type=type||'sine';o.frequency.setValueAtTime(f,n);
+  if(slide)o.frequency.exponentialRampToValueAtTime(slide,n+d);
+  gn.gain.setValueAtTime(vol||.1,n);
+  gn.gain.exponentialRampToValueAtTime(.001,n+d);
+  o.connect(gn);gn.connect(AC.destination);o.start(n);o.stop(n+d);
+}
+function blip(p){
+  if(t-(p.lb||-1)<.12)return;
+  p.lb=t;beep((p.id==1?520:660)+Math.random()*80,.08,'square',.03);
+}
+function chime(){[523,659,784].forEach((f,i)=>setTimeout(()=>beep(f,.3,'triangle',.1),i*110))}
+function fanfare(){[523,659,784,1047,784,1047].forEach((f,i)=>setTimeout(()=>beep(f,.35,'square',.07),i*160))}
+function critters(){
+  g.globalAlpha=.55;g.textAlign='center';
+  for(const [e,sp,y,sz,ph] of CRIT){
+    const span=W+120;
+    const x=(((ph*137+clk*sp)%span)+span)%span-60;
+    g.save();g.translate(x,y+8*Math.sin(clk*1.5+ph));
+    if(sp>0)g.scale(-1,1);
+    g.font=sz+'px serif';g.fillText(e,0,0);g.restore();
+  }
+  g.globalAlpha=1;
+}
+function party(a,b){
+  const cols=['#ff4d6d','#ffd84a','#4de0ff','#b6f23a','#ff9a3c','#c77dff'];
+  const hop=k=>-14*Math.abs(Math.sin(clk*4))*(k?1:.3);
+  const s1={id:1,x:385,y:165+hop(a>=b),face:1,dead:0,col:P[0].col};
+  const s2={id:2,x:515,y:165+hop(b>=a),face:-1,dead:0,col:P[1].col};
+  sub(s1);sub(s2);
+  g.font='30px serif';g.textAlign='center';
+  g.fillText('✋',450,160+hop(1));
+  for(let i=0;i<90;i++){
+    const x=(i*97)%W+20*Math.sin(clk*2+i);
+    const y=((i*53)+clk*(70+(i%4)*30))%(H+20)-10;
+    g.save();g.translate(x,y);g.rotate(clk*3+i);
+    g.fillStyle=cols[i%6];g.fillRect(-4,-2,8,4);g.restore();
+  }
+}
+function aboutScreen(){
+  g.fillStyle='#021a33f2';g.fillRect(40,70,820,420);
+  txt('About this game (for teachers and visitors)',W/2,122,26,'#ffe066');
+  const L=[
+    'AUV = Autonomous Underwater Vehicle, a robot submarine that gathers ocean data with no pilot.',
+    'AUVs run on batteries, so they have to stop and recharge. Surfacing for a ship takes time.',
+    'A wave energy converter (WEC) turns the rise and fall of ocean waves into electricity.',
+    'A WEC can power an underwater dock, so an AUV recharges right where it works.',
+    'Less travel and waiting means longer missions and more ocean surveyed.',
+    'Game: the Surface Sub waits for a ship when empty; the Dock Sub charges at the dock any time.'];
+  L.forEach((s,i)=>txt(s,W/2,180+i*42,16,'#fff'));
+  txt('Press I to close',W/2,455,18,'#9fe0ff');
+}
+function overlay(title,lines,dy=0){
+  g.fillStyle='#021a33dd';g.fillRect(100,110,700,340+dy);
+  txt(title,W/2,170+dy,34,'#ffe066');
+  lines.forEach((l,i)=>txt(l,W/2,215+dy+i*38,i==lines.length-1?20:17,i==lines.length-1?'#9fe0ff':'#fff'));
+}
+function loop(ts){
+  const dt=Math.min(.05,(ts-last)/1000||0);last=ts;
+  if(state=='play')upd(dt);
+  clk+=dt;
+  draw();txt('M: music  ·  I: about this game',W-10,H-6,12,'#fff','right');requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script></body></html>
